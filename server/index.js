@@ -15,6 +15,7 @@ import {
   shopRedact,
 } from "./controllers/gdpr.js";
 import eventHandler from "./events/_index.js";
+import billingRouter from "./billing/routes.js";
 import csp from "./middleware/csp.js";
 import isInitialLoad from "./middleware/isInitialLoad.js";
 import verifyCheckout from "./middleware/verifyCheckout.js";
@@ -77,6 +78,7 @@ const createServer = async (root = process.cwd()) => {
   app.use(csp);
   app.use(isInitialLoad);
   //Routes to make server calls
+  app.use("/api/apps/billing", verifyRequest, billingRouter); //Billing actions
   app.use("/api/apps", verifyRequest, userRoutes); //Verify user route requests
   app.use("/api/proxy_route", verifyProxy, proxyRouter); //MARK:- App Proxy routes
   app.use(
