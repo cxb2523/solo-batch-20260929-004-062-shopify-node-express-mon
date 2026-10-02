@@ -1,109 +1,241 @@
 import {
+  Badge,
+  Banner,
   BlockStack,
+  Box,
   Button,
   Card,
-  DataTable,
   InlineStack,
   Layout,
   Page,
+  Spinner,
   Text,
 } from "@shopify/polaris";
 import { navigate } from "raviger";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-const BillingAPI = () => {
-  const [responseData, setResponseData] = useState("");
-
-  async function fetchContent() {
-    setResponseData("loading...");
-    const res = await fetch("/api/apps/debug/createNewSubscription");
-    const data = await res.json();
-    if (data.error) {
-      setResponseData(data.error);
-    } else if (data.confirmationUrl) {
-      setResponseData("Redirecting");
-      const { confirmationUrl } = data;
-      open(confirmationUrl, "_top");
-    }
+const statusTone = (status) => {
+  switch (status) {
+    case "ACTIVE":
+      return "success";
+    case "PENDING":
+      return "attention";
+    case "CANCELLED":
+      return "critical";
+    default:
+      return "info";
   }
+};
+
+const formatDate = (value) =>
+  value ? new Date(value).toLocaleString() : "N/A";
+
+const BillingPage = () => {
+  const [plans, setPlans] = useState([]);
+  const [subscription, setSubscription] = useState(null);
+  const [inTrial, setInTrial] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/apps/billing/state");
+      const data = await res.json();
+      setPlans(data.plans ?? []);
+      setSubscription(data.subscription ?? null);
+      setInTrial(Boolean(data.inTrial));
+    } catch (e) {
+      setNotice({
+        tone: "critical",
+        text: "Failed to load billing state. Please refresh the page.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const switchPlan = async (planHandle) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/apps/billing/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planHandle }),
+      });
+      const data = await res.json();
+      if (data.confirmationUrl) {
+        // Redirect the merchant to Shopify's confirmation screen.
+        open(data.confirmationUrl, "_top");
+        return;
+      }
+      setNotice({
+        tone: "critical",
+        text: `${data.code ? `[${data.code}] ` : ""}${
+          data.message ?? "Failed to switch plan"
+        }`,
+      });
+    } catch (e) {
+      setNotice({ tone: "critical", text: "Failed to switch plan" });
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  const cancelPlan = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/apps/billing/cancel", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        setNotice({
+          tone: "success",
+          text: data.message ?? "Subscription cancelled",
+        });
+      } else {
+        setNotice({
+          tone: "critical",
+          text: `${data.code ? `[${data.code}] ` : ""}${
+            data.message ?? "Failed to cancel subscription"
+          }`,
+        });
+      }
+    } catch (e) {
+      setNotice({ tone: "critical", text: "Failed to cancel subscription" });
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
 
   return (
     <Page
-      title="Billing API"
-      backAction={{ content: "Home", onAction: () => navigate("/debug") }}
+      title="Subscription Plans"
+      subtitle="Manage the merchant's subscription plan"
+      backAction={{ content: "Debug", onAction: () => navigate("/debug") }}
     >
       <Layout>
+        {notice && (
+          <Layout.Section>
+            <Banner
+              tone={notice.tone}
+              onDismiss={() => setNotice(null)}
+              title={notice.text}
+            />
+          </Layout.Section>
+        )}
+
         <Layout.Section>
           <Card>
             <BlockStack gap="200">
-              <Text>
-                Subscribe your merchant to a test $10.25 plan and redirect to
-                your home page.
+              <Text as="h2" variant="headingMd">
+                Current subscription
               </Text>
-
-              {
-                /* If we have an error, it'll pop up here. */
-                responseData && <Text>{responseData}</Text>
-              }
-              <InlineStack gap="200" align="end">
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    fetchContent();
-                  }}
-                >
-                  Subscribe Merchant
-                </Button>
-              </InlineStack>
+              {loading ? (
+                <InlineStack align="center" blockAlign="center" gap="200">
+                  <Spinner size="small" />
+                  <Text as="span">Syncing with Shopify...</Text>
+                </InlineStack>
+              ) : subscription ? (
+                <BlockStack gap="200">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="span" variant="headingLg">
+                      {subscription.planName}
+                    </Text>
+                    <Badge tone={statusTone(subscription.status)}>
+                      {subscription.status}
+                    </Badge>
+                    {inTrial && <Badge tone="info">Trial</Badge>}
+                  </InlineStack>
+                  <Text as="p" tone="subdued">
+                    {subscription.price
+                      ? `${subscription.price.currencyCode} ${subscription.price.amount} / 30 days`
+                      : ""}
+                    {subscription.trialDays
+                      ? ` · ${subscription.trialDays} trial days`
+                      : ""}
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Subscription ID: {subscription.subscriptionId}
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Created: {formatDate(subscription.sourceCreatedAt)} · Last
+                    updated: {formatDate(subscription.sourceUpdatedAt)}
+                  </Text>
+                  {subscription.status === "PENDING" && (
+                    <Banner tone="info" title="Subscription pending">
+                      The merchant has not confirmed this subscription yet. It
+                      cannot be cancelled until it is accepted or declined.
+                    </Banner>
+                  )}
+                  {subscription.status === "ACTIVE" && (
+                    <InlineStack align="end">
+                      <Button
+                        tone="critical"
+                        variant="primary"
+                        loading={busy}
+                        onClick={cancelPlan}
+                      >
+                        Cancel subscription
+                      </Button>
+                    </InlineStack>
+                  )}
+                </BlockStack>
+              ) : (
+                <Text as="p">No active subscription. Pick a plan below.</Text>
+              )}
             </BlockStack>
           </Card>
         </Layout.Section>
-        <Layout.Section>
-          <ActiveSubscriptions />
-        </Layout.Section>
+
+        {plans.map((plan) => {
+          const isCurrent =
+            subscription &&
+            ["ACTIVE", "PENDING"].includes(subscription.status) &&
+            subscription.plan === plan.handle;
+          return (
+            <Layout.Section variant="oneHalf" key={plan.handle}>
+              <Card>
+                <BlockStack gap="200">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="h2" variant="headingMd">
+                      {plan.name}
+                    </Text>
+                    {isCurrent && <Badge tone="success">Current plan</Badge>}
+                  </InlineStack>
+                  <Text as="p">
+                    {plan.currencyCode} {plan.price} / 30 days
+                  </Text>
+                  <Text as="p" tone="subdued">
+                    Includes a {plan.trialDays}-day free trial.
+                  </Text>
+                  <Box minHeight="1px" />
+                  <InlineStack align="end">
+                    <Button
+                      variant="primary"
+                      disabled={isCurrent || loading}
+                      loading={busy}
+                      onClick={() => switchPlan(plan.handle)}
+                    >
+                      {subscription ? "Switch to this plan" : "Subscribe"}
+                    </Button>
+                  </InlineStack>
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+          );
+        })}
       </Layout>
     </Page>
   );
 };
 
-const ActiveSubscriptions = () => {
-  const [rows, setRows] = useState([]);
-
-  async function getActiveSubscriptions() {
-    const res = await fetch("/api/apps/debug/getActiveSubscriptions");
-    const data = await res.json();
-
-    let rowsData = [];
-    const activeSubscriptions = data.data.appInstallation.activeSubscriptions;
-
-    if (activeSubscriptions.length === 0) {
-      rowsData.push(["No Plan", "N/A", "N/A", "USD 0.00"]);
-    } else {
-      console.log("Rendering Data");
-      Object.entries(activeSubscriptions).map(([key, value]) => {
-        const { name, status, test } = value;
-        const { amount, currencyCode } =
-          value.lineItems[0].plan.pricingDetails.price;
-        rowsData.push([name, status, `${test}`, `${currencyCode} ${amount}`]);
-      });
-    }
-    setRows(rowsData);
-  }
-  useEffect(() => {
-    getActiveSubscriptions();
-  }, []);
-
-  return (
-    <>
-      <Card padding="0">
-        <DataTable
-          columnContentTypes={["text", "text", "text", "text"]}
-          headings={["Plan Name", "Status", "Test", "Amount"]}
-          rows={rows}
-        />
-      </Card>
-    </>
-  );
-};
-
-export default BillingAPI;
+export default BillingPage;

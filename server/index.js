@@ -22,6 +22,7 @@ import verifyHmac from "./middleware/verifyHmac.js";
 import verifyProxy from "./middleware/verifyProxy.js";
 import verifyRequest from "./middleware/verifyRequest.js";
 import proxyRouter from "./routes/app_proxy/index.js";
+import billingRoutes from "./routes/billing.js";
 import checkoutRoutes from "./routes/checkout/index.js";
 import userRoutes from "./routes/index.js";
 import webhookHandler from "./webhooks/_index.js";
@@ -78,6 +79,7 @@ const createServer = async (root = process.cwd()) => {
   app.use(isInitialLoad);
   //Routes to make server calls
   app.use("/api/apps", verifyRequest, userRoutes); //Verify user route requests
+  app.use("/api/apps/billing", verifyRequest, billingRoutes); //Billing routes
   app.use("/api/proxy_route", verifyProxy, proxyRouter); //MARK:- App Proxy routes
   app.use(
     "/api/checkout",
